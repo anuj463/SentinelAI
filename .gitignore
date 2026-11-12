@@ -1,0 +1,16 @@
+logs/
+*.log
+*.json
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.streamlit/secrets.toml
+suricata*.yaml
+*-backup.yaml
+*-update.yaml
+update-data/
+.vscode/
+.DS_Store
+Thumbs.db

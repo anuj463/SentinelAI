@@ -1,0 +1,3 @@
+# Harmless CyberSentinel AI laboratory DNS rule.
+# This detects the test query; it does not mean the domain is malicious.
+alert dns any any -> any any (msg:"CyberSentinel AI LAB - Test DNS Query Detected"; dns.query; content:"cybersentinel-lab.test"; nocase; sid:1000001; rev:1;)
