@@ -1,5 +1,0 @@
-
-{"timestamp":"2026-11-14T10:00:00.000000+0000","event_type":"alert","src_ip":"192.0.2.10","dest_ip":"198.51.100.20","proto":"UDP","alert":{"signature":"CyberSentinel AI Demo - High Severity","severity":1,"signature_id":1000001,"action":"allowed"}}
-{"timestamp":"2026-11-14T10:01:00.000000+0000","event_type":"alert","src_ip":"192.0.2.11","dest_ip":"198.51.100.21","proto":"TCP","alert":{"signature":"CyberSentinel AI Demo - Medium Severity","severity":2,"signature_id":1000002,"action":"allowed"}}
-{"timestamp":"2026-11-14T10:02:00.000000+0000","event_type":"alert","src_ip":"192.0.2.12","dest_ip":"198.51.100.22","proto":"TCP","alert":{"signature":"CyberSentinel AI Demo - Low Severity","severity":3,"signature_id":1000003,"action":"allowed"}}
-{"timestamp":"2026-11-14T10:03:00.000000+0000","event_type":"dns","src_ip":"192.0.2.15","dest_ip":"198.51.100.53","proto":"UDP","dns":{"rrname":"example.test","rrtype":"A"}}

@@ -27,7 +27,7 @@ st_autorefresh(interval=3000, key="refresh")
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
-DEFAULT_EVE_FILE = PROJECT_DIR / "sample_data" / "demo_eve.jsonl"
+DEFAULT_EVE_FILE = PROJECT_DIR / "logs" / "eve.json"
 
 EVE_FILE = os.getenv(
     "CYBERSENTINEL_EVE_FILE",
