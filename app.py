@@ -1,12 +1,10 @@
-import pandas as pd
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
-
-
-import os
+import pandas as pd
 import json
+import os
 from pathlib import Path
-
+from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
  
 
 
@@ -25,7 +23,11 @@ refresh_count = st_autorefresh(
     limit=None,
     key="cybersentinel_refresh"
 )
-st_autorefresh(interval=3000, key="refresh")
+st.title("🛡️ CyberSentinel AI")
+st.caption(
+    f"Last refreshed: {datetime.now().strftime('%H:%M:%S')} "
+    f"| Refresh count: {refresh_count}"
+)
 
 
 # ==================================================
