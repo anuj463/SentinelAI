@@ -1,11 +1,13 @@
+import pandas as pd
+import streamlit as st
+from streamlit_autorefresh import st_autorefresh
+
 
 import os
 import json
 from pathlib import Path
 
-import pandas as pd
-import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+ 
 
 
 # ==================================================
@@ -17,7 +19,12 @@ st.set_page_config(
     page_icon="🛡️",
     layout="wide"
 )
-
+# Automatic dashboard refresh every 3 seconds
+refresh_count = st_autorefresh(
+    interval=3000,
+    limit=None,
+    key="cybersentinel_refresh"
+)
 st_autorefresh(interval=3000, key="refresh")
 
 
