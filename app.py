@@ -1,9 +1,10 @@
 
-import json
+
 import os
+import json
 from pathlib import Path
 from datetime import datetime
-from collections import Counter, deque
+from collections import deque
 
 import pandas as pd
 import streamlit as st
@@ -20,7 +21,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Refresh the dashboard every 3 seconds.
+# Refresh dashboard every 3 seconds
 refresh_count = st_autorefresh(
     interval=3000,
     limit=None,
@@ -29,63 +30,127 @@ refresh_count = st_autorefresh(
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
-DEFAULT_EVE_FILE = (
-    Path.home()
-    / "Downloads"
-    / "CyberSentinelAI"
-    / "logs"
-    / "eve.json"
-)
+DEFAULT_EVE_FILE = PROJECT_DIR / "logs" / "eve.json"
 
 # ============================================================
-# 2. DATA SOURCE
+# 2. SUPABASE CONFIGURATION
+# ============================================================
+
+def get_supabase_credentials():
+    """Read credentials safely. Missing secrets are allowed."""
+
+    try:
+        url = st.secrets.get("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_SECRET_KEY", "")
+
+        if url and key:
+            return url, key
+
+    except Exception:
+        pass
+
+    return None, None
+
+
+SUPABASE_URL, SUPABASE_KEY = get_supabase_credentials()
+
+USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
+
+
+@st.cache_resource
+def get_supabase_client(url, key):
+    from supabase import create_client
+    return create_client(url, key)
+
+
+# ============================================================
+# 3. LOCAL EVE JSON READER
+# ============================================================
+
+def read_local_events(file_path, max_events=10000):
+    """Read the latest EVE JSON events without caching."""
+
+    events = []
+    path = Path(file_path)
+
+    if not path.exists():
+        return events, False
+
+    try:
+        with path.open(
+            "r",
+            encoding="utf-8",
+            errors="replace"
+        ) as file:
+
+            latest_lines = deque(file, maxlen=max_events)
+
+        for line in latest_lines:
+            try:
+                event = json.loads(line)
+
+                if isinstance(event, dict):
+                    events.append(event)
+
+            except json.JSONDecodeError:
+                continue
+
+        return events, True
+
+    except OSError as error:
+        st.error(f"Unable to read EVE JSON: {error}")
+        return [], False
+
+
+# ============================================================
+# 4. SUPABASE EVENT READER
+# ============================================================
+
+def read_cloud_events():
+
+    client = get_supabase_client(
+        SUPABASE_URL,
+        SUPABASE_KEY
+    )
+
+    response = (
+        client.table("suricata_events")
+        .select("id,event_data")
+        .order("id", desc=True)
+        .limit(5000)
+        .execute()
+    )
+
+    rows = response.data or []
+
+    events = []
+
+    for row in reversed(rows):
+        event = row.get("event_data")
+
+        if isinstance(event, dict):
+            events.append(event)
+
+    return events
+
+
+# ============================================================
+# 5. SIDEBAR AND DATA SOURCE
 # ============================================================
 
 st.sidebar.title("🛡️ Monitoring")
-
 st.sidebar.subheader("Event Source")
-
-use_supabase = (
-    "SUPABASE_URL" in st.secrets
-    and "SUPABASE_SECRET_KEY" in st.secrets
-)
 
 events = []
 source_description = ""
 
-if use_supabase:
+if USE_SUPABASE:
 
-    st.sidebar.success("Cloud database: Supabase")
+    st.sidebar.success("Connected data source: Supabase")
 
     try:
-        from supabase import create_client
-
-        @st.cache_resource
-        def get_supabase_client():
-            return create_client(
-                st.secrets["SUPABASE_URL"],
-                st.secrets["SUPABASE_SECRET_KEY"]
-            )
-
-        client = get_supabase_client()
-
-        response = (
-            client.table("suricata_events")
-            .select("id,event_data")
-            .order("id", desc=True)
-            .limit(5000)
-            .execute()
-        )
-
-        rows = response.data or []
-
-        events = [
-            row["event_data"]
-            for row in reversed(rows)
-            if isinstance(row.get("event_data"), dict)
-        ]
-
-        source_description = "Supabase cloud database"
+        events = read_cloud_events()
+        source_description = "Supabase Cloud Database"
 
     except Exception as error:
         st.error(f"Supabase connection failed: {error}")
@@ -93,55 +158,29 @@ if use_supabase:
 
 else:
 
+    default_path = os.getenv(
+        "CYBERSENTINEL_EVE_FILE",
+        str(DEFAULT_EVE_FILE)
+    )
+
     eve_path = st.sidebar.text_input(
         "EVE JSON file path",
-        value=os.getenv(
-            "CYBERSENTINEL_EVE_FILE",
-            str(DEFAULT_EVE_FILE)
-        )
+        value=default_path
     )
 
     st.sidebar.caption("Automatic refresh: 3 seconds")
 
-    eve_file = Path(eve_path)
+    events, file_exists = read_local_events(eve_path)
 
-    if eve_file.exists():
-
-        try:
-            # Read the latest events on every Streamlit rerun.
-            # No caching is used here.
-            with eve_file.open(
-                "r",
-                encoding="utf-8",
-                errors="replace"
-            ) as file:
-
-                latest_lines = deque(file, maxlen=10000)
-
-            for line in latest_lines:
-                try:
-                    event = json.loads(line)
-
-                    if isinstance(event, dict):
-                        events.append(event)
-
-                except json.JSONDecodeError:
-                    continue
-
-            source_description = str(eve_file)
-
-        except OSError as error:
-            st.error(f"Unable to read EVE JSON: {error}")
-            st.stop()
-
-    else:
-        st.error(f"EVE JSON file not found: {eve_file}")
+    if not file_exists:
+        st.error(f"EVE JSON file not found: {eve_path}")
         st.info(
             "Start Suricata with EVE JSON logging enabled "
-            "or enter the correct EVE JSON path."
+            "or enter the correct file path."
         )
         st.stop()
 
+    source_description = str(eve_path)
 
 st.sidebar.caption(f"Event source: {source_description}")
 
@@ -157,8 +196,9 @@ st.sidebar.caption(
 
 st.sidebar.caption(f"Refresh count: {refresh_count}")
 
+
 # ============================================================
-# 3. MAIN TITLE
+# 6. MAIN TITLE
 # ============================================================
 
 st.title("🛡️ CyberSentinel AI")
@@ -168,19 +208,22 @@ st.caption(
 )
 
 st.caption(
-    f"Dashboard refreshed at "
+    f"Last dashboard update: "
     f"{datetime.now().strftime('%H:%M:%S')}"
 )
 
 if not events:
+
     st.warning(
-        "No events are available yet. "
-        "Start Suricata and generate network traffic."
+        "No events available. Start Suricata and "
+        "generate network traffic."
     )
+
     st.stop()
 
+
 # ============================================================
-# 4. DATAFRAME CREATION
+# 7. DATAFRAME CREATION
 # ============================================================
 
 df = pd.DataFrame(events)
@@ -195,8 +238,9 @@ df["event_type"] = (
     .str.lower()
 )
 
+
 # ============================================================
-# 5. EXTRACT SECURITY ALERTS
+# 8. SECURITY ALERT EXTRACTION
 # ============================================================
 
 alert_records = []
@@ -211,29 +255,27 @@ for event in events:
     if not isinstance(alert_data, dict):
         alert_data = {}
 
-    severity = alert_data.get("severity")
-
     try:
-        severity = int(severity)
+        severity = int(alert_data.get("severity", 0))
     except (ValueError, TypeError):
         severity = 0
 
-    if severity == 1:
-        severity_label = "High"
+    severity_labels = {
+        1: "High",
+        2: "Medium",
+        3: "Low"
+    }
 
-    elif severity == 2:
-        severity_label = "Medium"
-
-    elif severity == 3:
-        severity_label = "Low"
-
-    else:
-        severity_label = "Unknown"
+    severity_label = severity_labels.get(
+        severity,
+        "Unknown"
+    )
 
     alert_records.append({
         "Timestamp": event.get("timestamp", "Unknown"),
         "Signature": alert_data.get(
-            "signature", "Unknown signature"
+            "signature",
+            "Unknown signature"
         ),
         "Severity": severity_label,
         "Severity Number": severity,
@@ -241,32 +283,27 @@ for event in events:
         "Destination IP": event.get("dest_ip", "Unknown"),
         "Protocol": event.get("proto", "Unknown"),
         "Action": alert_data.get("action", "Unknown"),
-        "Signature ID": alert_data.get("signature_id", "Unknown")
+        "Signature ID": alert_data.get(
+            "signature_id",
+            "Unknown"
+        )
     })
 
 alerts_df = pd.DataFrame(alert_records)
 
+
 # ============================================================
-# 6. NETWORK OVERVIEW
+# 9. NETWORK OVERVIEW
 # ============================================================
 
 st.header("Network Overview")
 
 total_events = len(events)
-
 total_alerts = len(alert_records)
 
-dns_count = int(
-    (df["event_type"] == "dns").sum()
-)
-
-tls_count = int(
-    (df["event_type"] == "tls").sum()
-)
-
-flow_count = int(
-    (df["event_type"] == "flow").sum()
-)
+dns_count = int((df["event_type"] == "dns").sum())
+tls_count = int((df["event_type"] == "tls").sum())
+flow_count = int((df["event_type"] == "flow").sum())
 
 col1, col2, col3, col4, col5 = st.columns(5)
 
@@ -278,45 +315,47 @@ col5.metric("Network Flows", flow_count)
 
 st.divider()
 
+
 # ============================================================
-# 7. EVENT DISTRIBUTION
+# 10. EVENT DISTRIBUTION
 # ============================================================
 
-st.subheader("Event Distribution")
-
-event_counts = (
-    df["event_type"]
-    .value_counts()
-    .sort_values(ascending=False)
-)
+st.header("Event Analytics")
 
 left_col, right_col = st.columns(2)
 
 with left_col:
 
-    st.subheader("Event Types")
+    st.subheader("Event Distribution")
+
+    event_counts = (
+        df["event_type"]
+        .value_counts()
+        .sort_values(ascending=False)
+    )
 
     if not event_counts.empty:
         st.bar_chart(event_counts)
     else:
         st.info("No event data available.")
 
+
 # ============================================================
-# 8. ALERT SEVERITY GRAPH
+# 11. ALERT SEVERITY GRAPH
 # ============================================================
 
 with right_col:
 
     st.subheader("Alert Severity")
 
-    if not alerts_df.empty:
+    severity_order = [
+        "High",
+        "Medium",
+        "Low",
+        "Unknown"
+    ]
 
-        severity_order = [
-            "High",
-            "Medium",
-            "Low",
-            "Unknown"
-        ]
+    if not alerts_df.empty:
 
         severity_counts = (
             alerts_df["Severity"]
@@ -324,34 +363,38 @@ with right_col:
             .reindex(severity_order, fill_value=0)
         )
 
-        # Remove categories with zero alerts.
-        severity_counts = severity_counts[
-            severity_counts > 0
-        ]
-
-        st.bar_chart(
-            severity_counts,
-            y_label="Number of security alerts",
-            x_label="Severity level"
-        )
-
-        st.caption(
-            "Severity 1 = High | "
-            "Severity 2 = Medium | "
-            "Severity 3 = Low"
-        )
-
     else:
 
+        severity_counts = pd.Series(
+            [0, 0, 0, 0],
+            index=severity_order,
+            dtype=int
+        )
+
+    severity_chart = severity_counts.rename_axis(
+        "Severity"
+    ).reset_index(name="Alert Count")
+
+    st.bar_chart(
+        severity_chart.set_index("Severity")
+    )
+
+    st.caption(
+        "Severity 1 = High | "
+        "Severity 2 = Medium | "
+        "Severity 3 = Low"
+    )
+
+    if alerts_df.empty:
         st.info(
-            "No Suricata alerts detected yet. "
-            "The graph will update when alerts are generated."
+            "No Suricata alerts detected in the loaded events."
         )
 
 st.divider()
 
+
 # ============================================================
-# 9. SECURITY ALERTS TABLE
+# 12. SECURITY ALERT TABLE
 # ============================================================
 
 st.header("Security Alerts")
@@ -371,41 +414,37 @@ if not alerts_df.empty:
 
 else:
 
-    st.success(
-        "No security alerts detected in the loaded events."
-    )
+    st.success("No security alerts detected yet.")
+
+
+# ============================================================
+# 13. DNS MONITORING
+# ============================================================
 
 st.divider()
-
-# ============================================================
-# 10. DNS EVENTS
-# ============================================================
-
 st.header("DNS Monitoring")
 
-dns_events = [
-    event for event in events
-    if event.get("event_type") == "dns"
-]
+dns_records = []
 
-if dns_events:
+for event in events:
 
-    dns_records = []
+    if event.get("event_type") != "dns":
+        continue
 
-    for event in dns_events:
+    dns_data = event.get("dns", {})
 
-        dns_data = event.get("dns", {})
+    if not isinstance(dns_data, dict):
+        dns_data = {}
 
-        if not isinstance(dns_data, dict):
-            dns_data = {}
+    dns_records.append({
+        "Timestamp": event.get("timestamp"),
+        "Source IP": event.get("src_ip"),
+        "Destination IP": event.get("dest_ip"),
+        "DNS Query": dns_data.get("rrname"),
+        "Record Type": dns_data.get("rrtype")
+    })
 
-        dns_records.append({
-            "Timestamp": event.get("timestamp"),
-            "Source IP": event.get("src_ip"),
-            "Destination IP": event.get("dest_ip"),
-            "DNS Query": dns_data.get("rrname"),
-            "Record Type": dns_data.get("rrtype")
-        })
+if dns_records:
 
     st.dataframe(
         pd.DataFrame(dns_records).tail(100),
@@ -414,39 +453,38 @@ if dns_events:
     )
 
 else:
+
     st.info("No DNS events available.")
 
+
+# ============================================================
+# 14. TLS MONITORING
+# ============================================================
+
 st.divider()
-
-# ============================================================
-# 11. TLS EVENTS
-# ============================================================
-
 st.header("TLS Monitoring")
 
-tls_events = [
-    event for event in events
-    if event.get("event_type") == "tls"
-]
+tls_records = []
 
-if tls_events:
+for event in events:
 
-    tls_records = []
+    if event.get("event_type") != "tls":
+        continue
 
-    for event in tls_events:
+    tls_data = event.get("tls", {})
 
-        tls_data = event.get("tls", {})
+    if not isinstance(tls_data, dict):
+        tls_data = {}
 
-        if not isinstance(tls_data, dict):
-            tls_data = {}
+    tls_records.append({
+        "Timestamp": event.get("timestamp"),
+        "Source IP": event.get("src_ip"),
+        "Destination IP": event.get("dest_ip"),
+        "Server Name": tls_data.get("sni"),
+        "TLS Version": tls_data.get("version")
+    })
 
-        tls_records.append({
-            "Timestamp": event.get("timestamp"),
-            "Source IP": event.get("src_ip"),
-            "Destination IP": event.get("dest_ip"),
-            "Server Name": tls_data.get("sni"),
-            "TLS Version": tls_data.get("version")
-        })
+if tls_records:
 
     st.dataframe(
         pd.DataFrame(tls_records).tail(100),
@@ -455,41 +493,40 @@ if tls_events:
     )
 
 else:
+
     st.info("No TLS events available.")
 
+
+# ============================================================
+# 15. NETWORK FLOW MONITORING
+# ============================================================
+
 st.divider()
-
-# ============================================================
-# 12. NETWORK FLOW EVENTS
-# ============================================================
-
 st.header("Network Flow Monitoring")
 
-flow_events = [
-    event for event in events
-    if event.get("event_type") == "flow"
-]
+flow_records = []
 
-if flow_events:
+for event in events:
 
-    flow_records = []
+    if event.get("event_type") != "flow":
+        continue
 
-    for event in flow_events:
+    flow_data = event.get("flow", {})
 
-        flow_data = event.get("flow", {})
+    if not isinstance(flow_data, dict):
+        flow_data = {}
 
-        if not isinstance(flow_data, dict):
-            flow_data = {}
+    flow_records.append({
+        "Timestamp": event.get("timestamp"),
+        "Source IP": event.get("src_ip"),
+        "Source Port": event.get("src_port"),
+        "Destination IP": event.get("dest_ip"),
+        "Destination Port": event.get("dest_port"),
+        "Protocol": event.get("proto"),
+        "Flow State": flow_data.get("state")
+    })
 
-        flow_records.append({
-            "Timestamp": event.get("timestamp"),
-            "Source IP": event.get("src_ip"),
-            "Source Port": event.get("src_port"),
-            "Destination IP": event.get("dest_ip"),
-            "Destination Port": event.get("dest_port"),
-            "Protocol": event.get("proto"),
-            "Flow State": flow_data.get("state")
-        })
+if flow_records:
 
     st.dataframe(
         pd.DataFrame(flow_records).tail(100),
@@ -498,10 +535,12 @@ if flow_events:
     )
 
 else:
+
     st.info("No network flow events available.")
 
+
 # ============================================================
-# 13. FOOTER
+# 16. FOOTER
 # ============================================================
 
 st.divider()
@@ -511,6 +550,4 @@ st.caption(
     "Emerging Threats Rules, Python and Streamlit"
 )
 
-st.caption(
-    "Automatic refresh interval: 3 seconds"
-)
+st.caption("Automatic refresh interval: 3 seconds")
